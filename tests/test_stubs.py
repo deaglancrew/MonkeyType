@@ -588,6 +588,12 @@ class TestModuleStub:
                               class_stubs=class_stubs,
                               generated_class_stubs=typed_dict_class_stubs)
         expected = '\n'.join([
+            'from typing import (',
+            '    Any,',
+            '    Optional,',
+            ')',
+            '',
+            '',
             'class DummyAnInstanceMethodTypedDict__RENAME_ME__(TypedDict):',
             '    c: int',
             '',
@@ -816,7 +822,8 @@ class TestBuildModuleStubs:
             _func_stub_from_callable(Dummy.an_instance_method, to_strip),
             _func_stub_from_callable(Dummy.a_static_method, to_strip),
         ])
-        imports = {'typing': {'Any', 'Optional'}}
+        imports = ImportMap()
+        imports['typing'] = {'Any', 'Optional'}
         expected = {
             'tests.test_stubs': ModuleStub(function_stubs=[simple_add_stub]),
             'tests.util': ModuleStub(class_stubs=[dummy_stub], imports_stub=ImportBlockStub(imports)),

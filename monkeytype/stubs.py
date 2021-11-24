@@ -7,6 +7,7 @@ import asyncio
 import collections
 import enum
 import inspect
+import itertools
 import logging
 import re
 from abc import (
@@ -25,6 +26,8 @@ from typing import (
     Tuple,
     Union,
 )
+
+from mypy_extensions import TypedDict
 
 from monkeytype.compat import (
     is_any,
@@ -109,6 +112,12 @@ class ImportMap(collections.defaultdict):
     def merge(self, other: 'ImportMap') -> None:
         for module, names in other.items():
             self[module].update(names)
+
+    def update_render(self, render: str) -> str:
+        for module, names in self.items():
+            for name in names:
+                render = render.replace(f'{module}.{name}', name)
+        return render
 
 
 def _get_import_for_qualname(qualname: str) -> str:
@@ -254,14 +263,28 @@ class Stub(metaclass=ABCMeta):
             return self.__dict__ == other.__dict__
         return NotImplemented
 
+    @property
+    def _children(self):
+        return []
+
+    @property
+    def import_map(self):
+        base_map = getattr(self, '_import_map', ImportMap())
+        for child in self._children:
+            base_map.merge(child.import_map)
+        return base_map
+
     @abstractmethod
     def render(self) -> str:
         pass
 
 
 class ImportBlockStub(Stub):
-    def __init__(self, imports: ImportMap = None) -> None:
-        self.imports = imports if imports else ImportMap()
+    def __init__(self, import_getter: Union[dict, Callable[[], ImportMap]]) -> None:
+        if isinstance(import_getter, dict):
+            self._import_getter = lambda: import_getter
+        else:
+            self._import_getter = import_getter
 
     def render(self) -> str:
         imports = []
@@ -277,6 +300,13 @@ class ImportBlockStub(Stub):
                 stanza.append(")")
                 imports.append("\n".join(stanza))
         return "\n".join(imports)
+
+    @property
+    def imports(self):
+        return self._import_getter()
+
+    def __eq__(self, other):
+        return self.imports == other.imports
 
     def __repr__(self) -> str:
         return 'ImportBlockStub(%s)' % (repr(self.imports),)
@@ -482,6 +512,10 @@ class AttributeStub(Stub):
     def render(self, prefix: str = '') -> str:
         return f'{prefix}{self.name}: {render_annotation(self.typ)}'
 
+    @property
+    def import_map(self):
+        return get_imports_for_annotation(self.typ)
+
     def __repr__(self) -> str:
         return f'AttributeStub({self.name}, {self.typ})'
 
@@ -492,13 +526,12 @@ class FunctionStub(Stub):
             name: str,
             signature: inspect.Signature,
             kind: FunctionKind,
-            strip_modules: Iterable[str] = None,
+            strip_modules = None,
             is_async: bool = False
     ) -> None:
         self.name = name
         self.signature = signature
         self.kind = kind
-        self.strip_modules = strip_modules or []
         self.is_async = is_async
 
     def render(self, prefix: str = '') -> str:
@@ -509,8 +542,7 @@ class FunctionStub(Stub):
         s += render_signature(self.signature, 120 - len(s), prefix) + ': ...'
         # Yes, this is a horrible hack, but inspect.py gives us no way to
         # specify the function that should be used to format annotations.
-        for module in self.strip_modules:
-            s = s.replace(module + '.', '')
+        s = self.import_map.update_render(s)
         if self.kind == FunctionKind.CLASS:
             s = prefix + "@classmethod\n" + s
         elif self.kind == FunctionKind.STATIC:
@@ -521,9 +553,13 @@ class FunctionStub(Stub):
             s = prefix + "@cached_property\n" + s
         return s
 
+    @property
+    def import_map(self):
+        return get_imports_for_signature(self.signature)
+
     def __repr__(self) -> str:
-        return 'FunctionStub(%s, %s, %s, %s, %s)' % (
-            repr(self.name), repr(self.signature), repr(self.kind), repr(self.strip_modules), self.is_async)
+        return 'FunctionStub(%s, %s, %s, %s)' % (
+            repr(self.name), repr(self.signature), repr(self.kind), self.is_async)
 
 
 class ClassStub(Stub):
@@ -538,6 +574,11 @@ class ClassStub(Stub):
         self.attribute_stubs = attribute_stubs or []
         if function_stubs is not None:
             self.function_stubs = {stub.name: stub for stub in function_stubs}
+        self._import_map = ImportMap()
+
+    @property
+    def _children(self):
+        return list(itertools.chain.from_iterable([self.function_stubs.values(), self.attribute_stubs]))
 
     def render(self) -> str:
         parts = [
@@ -692,7 +733,7 @@ class ModuleStub(Stub):
             parts.append(func_stub.render())
         for class_stub in sorted(self.class_stubs.values(), key=lambda s: s.name):
             parts.append(class_stub.render())
-        return "\n\n\n".join(parts)
+        return self.import_map.update_render("\n\n\n".join(parts))
 
     def __repr__(self) -> str:
         return 'ModuleStub(%s, %s, %s, %s)' % (
@@ -822,14 +863,9 @@ def build_module_stubs(entries: Iterable[FunctionDefinition]) -> Dict[str, Modul
         if entry.module not in mod_stubs:
             mod_stubs[entry.module] = ModuleStub()
         mod_stub = mod_stubs[entry.module]
-        imports = get_imports_for_signature(entry.signature)
-        # Import TypedDict, if needed.
-        if entry.typed_dict_class_stubs:
-            imports['mypy_extensions'].add('TypedDict')
-        func_stub = FunctionStub(name, entry.signature, entry.kind, list(imports.keys()), entry.is_async)
-        # Don't need to import anything from the same module
-        imports.pop(entry.module, None)
-        mod_stub.imports_stub.imports.merge(imports)
+
+        func_stub = FunctionStub(name, entry.signature, entry.kind, is_async=entry.is_async)
+
         if klass is not None:
             if klass not in mod_stub.class_stubs:
                 mod_stub.class_stubs[klass] = ClassStub(klass)
