@@ -100,6 +100,8 @@ class Config(metaclass=ABCMeta):
     def type_getter(self) -> TypeGetter:
         return TypeGetter(self.type_hooks())
 
+    def dedupe_generated_classes(self) -> bool:
+        return False
 
 
 lib_paths = {sysconfig.get_path(n) for n in ['stdlib', 'purelib', 'platlib']}

@@ -62,7 +62,7 @@ from monkeytype.typing import (
     TypeGetter,
 )
 from monkeytype.util import get_name_in_module
-
+from monkeytype.stub_processing import dedupe_module
 
 logger = logging.getLogger(__name__)
 
@@ -906,6 +906,7 @@ def build_module_stubs_from_traces(
     type_getter: TypeGetter,
     existing_annotation_strategy: ExistingAnnotationStrategy = ExistingAnnotationStrategy.REPLICATE,
     rewriter: Optional[TypeRewriter] = None,
+    dedupe: bool = False,
 ) -> Dict[str, ModuleStub]:
     """Given an iterable of call traces, build the corresponding stubs."""
     index: DefaultDict[Callable, Set[CallTrace]] = collections.defaultdict(set)
@@ -915,7 +916,11 @@ def build_module_stubs_from_traces(
     for func, traces in index.items():
         defn = get_updated_definition(func, traces, type_getter, rewriter, existing_annotation_strategy)
         defns.append(defn)
-    return build_module_stubs(defns)
+    module_stubs = build_module_stubs(defns)
+    if dedupe:
+        for module in module_stubs.values():
+            dedupe_module(module)
+    return module_stubs
 
 
 class StubIndexBuilder(CallTraceLogger):
