@@ -93,5 +93,7 @@ class WithNamedTuple(DefaultConfig):
     def type_hooks(self) -> List[TypeHook]:
         return super().type_hooks() + [DummyNamedTuple(), PanderaDataFrame()]
 
+    def dedupe_generated_classes(self) -> bool:
+        return True
 
 CONFIG = WithNamedTuple()

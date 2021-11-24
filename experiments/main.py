@@ -26,6 +26,7 @@ def print_stub():
         traces,
         CONFIG.type_getter(),
         rewriter=rewriter,
+        dedupe=CONFIG.dedupe_generated_classes()
     )
     print(stubs.get(module, None).render())
 
