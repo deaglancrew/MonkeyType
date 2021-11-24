@@ -24,6 +24,7 @@ from typing import (
     Type,
     TypeVar,
     Union,
+    NamedTuple,
 )
 
 import pytest
@@ -39,7 +40,7 @@ from monkeytype.stubs import (
     ImportBlockStub,
     ImportMap,
     ModuleStub,
-    ReplaceTypedDictsWithStubs,
+    ReplaceClassicalTypesWithStubs,
     StubIndexBuilder,
     build_module_stubs,
     get_imports_for_annotation,
@@ -54,6 +55,14 @@ from monkeytype.tracing import CallTrace
 from monkeytype.typing import NoneType, make_typed_dict, TypeGetter
 from mypy_extensions import TypedDict
 from .util import Dummy
+
+
+class DummyNamedTuple(NamedTuple):
+    a: int
+    b: Union[int, str]
+
+
+DummyNamedTuple.__module__ = None  # Needed to pretend this is procedurally generated
 
 UserId = NewType('UserId', int)
 T = TypeVar("T")
@@ -416,6 +425,16 @@ class TestReplaceTypedDictsWithStubs:
             (Tuple[str, int], (Tuple[str, int], [])),
             (List[List[Dict[str, int]]], (List[List[Dict[str, int]]], []),),
             (List[List[Dict[str, int]]], (List[List[Dict[str, int]]], []),),
+            (DummyNamedTuple,
+             (make_forward_ref('FooBarNamedTuple__RENAME_ME__'),
+              [ClassStub(
+                  name='FooBarNamedTuple__RENAME_ME__(NamedTuple)',
+                  function_stubs=[],
+                  attribute_stubs=[
+                      AttributeStub(name='a', typ=int),
+                      AttributeStub(name='b', typ=Union[int, str]),
+                  ])]
+              )),
             (
                 List[List[make_typed_dict(required_fields={'a': int, 'b': str})]],
                 (List[List[make_forward_ref('FooBarTypedDict__RENAME_ME__')]], [SIMPLE_TYPED_DICT_STUB]),
@@ -494,7 +513,7 @@ class TestReplaceTypedDictsWithStubs:
         ],
     )
     def test_replace_typed_dict_with_stubs(self, typ, expected):
-        rewritten_type, stubs = ReplaceTypedDictsWithStubs.rewrite_and_get_stubs(typ, class_name_hint='foo_bar')
+        rewritten_type, stubs = ReplaceClassicalTypesWithStubs.rewrite_and_get_stubs(typ, class_name_hint='foo_bar')
         actual = rewritten_type, stubs
         assert actual == expected
 
@@ -532,7 +551,7 @@ module_stub_for_method_with_typed_dict = {
             ),
         ],
         imports_stub=ImportBlockStub(typed_dict_import_map),
-        typed_dict_class_stubs=[
+        generated_class_stubs=[
             ClassStub(
                 name='FooTypedDict__RENAME_ME__(TypedDict)',
                 function_stubs=[],
@@ -564,10 +583,10 @@ class TestModuleStub:
         test2_stub = ClassStub('Test2', function_stubs=func_stubs)
         other_class_stubs = module_stub_for_method_with_typed_dict['tests.util'].class_stubs.values()
         class_stubs = (*other_class_stubs, test_stub, test2_stub)
-        typed_dict_class_stubs = module_stub_for_method_with_typed_dict['tests.util'].typed_dict_class_stubs
+        typed_dict_class_stubs = module_stub_for_method_with_typed_dict['tests.util'].generated_class_stubs
         mod_stub = ModuleStub(function_stubs=func_stubs,
                               class_stubs=class_stubs,
-                              typed_dict_class_stubs=typed_dict_class_stubs)
+                              generated_class_stubs=typed_dict_class_stubs)
         expected = '\n'.join([
             'class DummyAnInstanceMethodTypedDict__RENAME_ME__(TypedDict):',
             '    c: int',

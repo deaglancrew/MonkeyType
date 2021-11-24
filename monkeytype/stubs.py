@@ -239,9 +239,13 @@ def shrink_traced_types(
     return (shrunken_arg_types, return_type, yield_type)
 
 
+def _make_classical_stub_name(parameter_name: str, base_name: str):
+    return f"{pascal_case(parameter_name)}{base_name}__RENAME_ME__"
+
+
 def get_typed_dict_class_name(parameter_name: str) -> str:
     """Return the name for a TypedDict class generated for parameter `parameter_name`."""
-    return f'{pascal_case(parameter_name)}TypedDict__RENAME_ME__'
+    return _make_classical_stub_name(parameter_name, base_name='TypedDict')
 
 
 class Stub(metaclass=ABCMeta):
@@ -550,8 +554,16 @@ class ClassStub(Stub):
                                           tuple(self.function_stubs.values()),
                                           tuple(self.attribute_stubs))
 
+    def __eq__(self, other):
+        return (self.name == other.name
+                and self.function_stubs == other.function_stubs
+                and self.attribute_stubs == other.attribute_stubs)
 
-class ReplaceTypedDictsWithStubs(TypeRewriter):
+    def add_import(self, module: str, name: str):
+        self._import_map[module].add(name)
+
+
+class ReplaceClassicalTypesWithStubs(TypeRewriter):
     """Replace TypedDicts in a generic type with class stubs and store all the stubs."""
 
     def __init__(self, class_name_hint: str) -> None:
@@ -584,17 +596,41 @@ class ReplaceTypedDictsWithStubs(TypeRewriter):
         # Value of type "type" is not indexable.
         return cls[elems]  # type: ignore
 
-    def _add_typed_dict_class_stub(self, fields: Dict[str, type], class_name: str,
-                                   base_class_name: str = 'TypedDict', total: bool = True) -> None:
+    def _add_class_stub(self, fields: Dict[str, type], class_name: str,
+                        base_classes: Tuple[type] = (TypedDict,), base_class_names: Optional[List[str]] = None, meta_flags: Dict[str, Any] = None) -> None:
         attribute_stubs = []
         for name, typ in fields.items():
             rewritten_type, stubs = self.rewrite_and_get_stubs(typ, class_name_hint=name)
             attribute_stubs.append(AttributeStub(name, rewritten_type))
             self.stubs.extend(stubs)
-        total_flag = '' if total else ', total=False'
-        self.stubs.append(ClassStub(name=f'{class_name}({base_class_name}{total_flag})',
-                                    function_stubs=[],
-                                    attribute_stubs=attribute_stubs))
+        if meta_flags is None:
+            meta_flags = dict()
+        inheritance_flags = [f"{key}={value}" for key, value in meta_flags.items()]
+        if base_class_names is not None:
+            inheritance_expression = ', '.join(base_class_names + inheritance_flags)
+        else:
+            inheritance_expression = ', '.join([base.__name__ for base in base_classes] + inheritance_flags)
+        stub = ClassStub(name=f'{class_name}({inheritance_expression})', function_stubs=[],
+                         attribute_stubs=attribute_stubs)
+        for base in base_classes:
+            stub.add_import(base.__module__, base.__name__)
+        self.stubs.append(stub)
+
+    def generic_rewrite(self, typ: type) -> type:
+        if hasattr(typ, 'copy_with') and hasattr(typ, '__args__'):
+            return typ.copy_with(tuple(self.rewrite(t) for t in typ.__args__))
+        bases = tuple()
+        if hasattr(typ, '__orig_bases__'):
+            bases = tuple(base for base in typ.__orig_bases__)
+        elif hasattr(typ, '__bases__'):
+            bases = typ.__bases__
+        if hasattr(typ, '__annotations__') and typ.__module__ is None:
+            class_name = _make_classical_stub_name(self._class_name_hint, 'Dummy' if not bases else bases[0].__name__)
+            self._add_class_stub(fields=typ.__annotations__,
+                                 class_name=class_name,
+                                 base_classes=bases)
+            return make_forward_ref(class_name)
+        return super().generic_rewrite(typ)
 
     def rewrite_anonymous_TypedDict(self, typed_dict: type) -> type:
         class_name = get_typed_dict_class_name(self._class_name_hint)
@@ -605,19 +641,20 @@ class ReplaceTypedDictsWithStubs(TypeRewriter):
             raise Exception("Expected empty TypedDicts to be shrunk as Dict[Any, Any]"
                             " but got an empty TypedDict anyway")
         elif has_required_fields and not has_optional_fields:
-            self._add_typed_dict_class_stub(required_fields, class_name)
+            self._add_class_stub(required_fields, class_name)
         elif not has_required_fields and has_optional_fields:
-            self._add_typed_dict_class_stub(optional_fields, class_name, total=False)
+            self._add_class_stub(optional_fields, class_name, meta_flags={'total': False})
         else:
-            self._add_typed_dict_class_stub(required_fields, class_name)
+            self._add_class_stub(required_fields, class_name)
             base_class_name = class_name
             class_name = get_typed_dict_class_name(self._class_name_hint) + 'NonTotal'
-            self._add_typed_dict_class_stub(optional_fields, class_name, base_class_name, total=False)
+            self._add_class_stub(optional_fields, class_name, base_class_names=[base_class_name],
+                                 meta_flags={'total': False})
         return make_forward_ref(class_name)
 
     @staticmethod
     def rewrite_and_get_stubs(typ: type, class_name_hint: str) -> Tuple[type, List[ClassStub]]:
-        rewriter = ReplaceTypedDictsWithStubs(class_name_hint)
+        rewriter = ReplaceClassicalTypesWithStubs(class_name_hint)
         rewritten_type = rewriter.rewrite(typ)
         return rewritten_type, rewriter.stubs
 
@@ -628,7 +665,7 @@ class ModuleStub(Stub):
             function_stubs: Iterable[FunctionStub] = None,
             class_stubs: Iterable[ClassStub] = None,
             imports_stub: ImportBlockStub = None,
-            typed_dict_class_stubs: Iterable[ClassStub] = None,
+            generated_class_stubs: Iterable[ClassStub] = None,
     ) -> None:
         self.function_stubs: Dict[str, FunctionStub] = {}
         if function_stubs is not None:
@@ -636,17 +673,21 @@ class ModuleStub(Stub):
         self.class_stubs: Dict[str, ClassStub] = {}
         if class_stubs is not None:
             self.class_stubs = {stub.name: stub for stub in class_stubs}
-        self.imports_stub = imports_stub if imports_stub else ImportBlockStub()
-        self.typed_dict_class_stubs: List[ClassStub] = []
-        if typed_dict_class_stubs is not None:
-            self.typed_dict_class_stubs = list(typed_dict_class_stubs)
+        self.generated_class_stubs: List[ClassStub] = []
+        if generated_class_stubs is not None:
+            self.generated_class_stubs = list(generated_class_stubs)
+        self.imports_stub = imports_stub if imports_stub else ImportBlockStub(lambda: self.import_map)
+
+    @property
+    def _children(self):
+        return list(itertools.chain.from_iterable([self.function_stubs.values(), self.class_stubs.values(), self.generated_class_stubs]))
 
     def render(self) -> str:
         parts = []
         if self.imports_stub.imports:
             parts.append(self.imports_stub.render())
-        for typed_dict_class_stub in sorted(self.typed_dict_class_stubs, key=lambda s: s.name):
-            parts.append(typed_dict_class_stub.render())
+        for generated_class_stub in sorted(self.generated_class_stubs, key=lambda s: s.name):
+            parts.append(generated_class_stub.render())
         for func_stub in sorted(self.function_stubs.values(), key=lambda s: s.name):
             parts.append(func_stub.render())
         for class_stub in sorted(self.class_stubs.values(), key=lambda s: s.name):
@@ -658,7 +699,7 @@ class ModuleStub(Stub):
             tuple(self.function_stubs.values()),
             tuple(self.class_stubs.values()),
             repr(self.imports_stub),
-            tuple(self.typed_dict_class_stubs),
+            tuple(self.generated_class_stubs),
         )
 
 
@@ -677,14 +718,14 @@ class FunctionDefinition:
         kind: FunctionKind,
         sig: inspect.Signature,
         is_async: bool = False,
-        typed_dict_class_stubs: Iterable[ClassStub] = None,
+        generated_class_stubs: Iterable[ClassStub] = None,
     ) -> None:
         self.module = module
         self.qualname = qualname
         self.kind = kind
         self.signature = sig
         self.is_async = is_async
-        self.typed_dict_class_stubs = typed_dict_class_stubs or []
+        self.generated_class_stubs = generated_class_stubs or []
 
     @classmethod
     def from_callable(cls, func: Callable, kind: FunctionKind = None) -> 'FunctionDefinition':
@@ -702,24 +743,24 @@ class FunctionDefinition:
         yield_type: Optional[type],
         existing_annotation_strategy: ExistingAnnotationStrategy = ExistingAnnotationStrategy.REPLICATE,
     ) -> 'FunctionDefinition':
-        typed_dict_class_stubs: List[ClassStub] = []
+        generated_class_stubs: List[ClassStub] = []
         new_arg_types = {}
         for name, typ in arg_types.items():
-            rewritten_type, stubs = ReplaceTypedDictsWithStubs.rewrite_and_get_stubs(typ, class_name_hint=name)
+            rewritten_type, stubs = ReplaceClassicalTypesWithStubs.rewrite_and_get_stubs(typ, class_name_hint=name)
             new_arg_types[name] = rewritten_type
-            typed_dict_class_stubs.extend(stubs)
+            generated_class_stubs.extend(stubs)
 
         if return_type:
             # Replace the dot in a qualified name.
             class_name_hint = func.__qualname__.replace('.', '_')
-            return_type, stubs = ReplaceTypedDictsWithStubs.rewrite_and_get_stubs(return_type, class_name_hint)
-            typed_dict_class_stubs.extend(stubs)
+            return_type, stubs = ReplaceClassicalTypesWithStubs.rewrite_and_get_stubs(return_type, class_name_hint)
+            generated_class_stubs.extend(stubs)
 
         if yield_type:
             # Replace the dot in a qualified name.
             class_name_hint = func.__qualname__.replace('.', '_') + 'Yield'
-            yield_type, stubs = ReplaceTypedDictsWithStubs.rewrite_and_get_stubs(yield_type, class_name_hint)
-            typed_dict_class_stubs.extend(stubs)
+            yield_type, stubs = ReplaceClassicalTypesWithStubs.rewrite_and_get_stubs(yield_type, class_name_hint)
+            generated_class_stubs.extend(stubs)
 
         function = FunctionDefinition.from_callable(func)
         signature = function.signature
@@ -729,7 +770,7 @@ class FunctionDefinition:
                                             yield_type, existing_annotation_strategy)
         return FunctionDefinition(function.module, function.qualname,
                                   function.kind, signature,
-                                  function.is_async, typed_dict_class_stubs)
+                                  function.is_async, generated_class_stubs)
 
     @property
     def has_self(self) -> bool:
@@ -743,7 +784,7 @@ class FunctionDefinition:
     def __repr__(self) -> str:
         return "FunctionDefinition('%s', '%s', %s, %s, %s, %s)" % (
             self.module, self.qualname, self.kind,
-            self.signature, self.is_async, self.typed_dict_class_stubs
+            self.signature, self.is_async, self.generated_class_stubs
         )
 
 
@@ -797,7 +838,7 @@ def build_module_stubs(entries: Iterable[FunctionDefinition]) -> Dict[str, Modul
         else:
             mod_stub.function_stubs[func_stub.name] = func_stub
 
-        mod_stub.typed_dict_class_stubs.extend(entry.typed_dict_class_stubs)
+        mod_stub.generated_class_stubs.extend(entry.generated_class_stubs)
 
     return mod_stubs
 
