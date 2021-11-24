@@ -393,6 +393,7 @@ class RenderAnnotation(GenericTypeRewriter[str]):
             rendered = rendered.replace('typing.', '')
         # Temporary hacky workaround for #76 to fix remaining NoneType hints by search-replace
         rendered = rendered.replace('NoneType', 'None')
+        rendered = re.sub("ForwardRef\('(?P<content>[^)]+)'\)", '\g<content>', rendered)
         return rendered
 
 
