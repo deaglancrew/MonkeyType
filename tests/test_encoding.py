@@ -12,6 +12,7 @@ from typing import (
     Tuple,
     Type,
     Union,
+    NamedTuple,
 )
 
 import pytest
@@ -37,6 +38,11 @@ from unittest.mock import Mock
 
 def dummy_func(a, b):
     return a + b
+
+
+class DummyNamedTuple(NamedTuple):
+    a: int
+    b: Union[int, str]
 
 
 class TestTypeConversion:
@@ -79,6 +85,13 @@ class TestTypeConversion:
     def test_type_round_trip(self, typ):
         assert type_from_dict(type_to_dict(typ)) == typ
         assert type_from_json(type_to_json(typ)) == typ
+
+    def test_named_tuple_round_trip(self):
+        typ = DummyNamedTuple
+        assert type_from_dict(type_to_dict(typ)).__annotations__ == typ.__annotations__
+        assert type_from_dict(type_to_dict(typ)).__qualname__ == typ.__qualname__
+        assert type_from_json(type_to_json(typ)).__annotations__ == typ.__annotations__
+        assert type_from_json(type_to_json(typ)).__qualname__ == typ.__qualname__
 
     @pytest.mark.parametrize(
         'typ, expected',
