@@ -51,12 +51,13 @@ from monkeytype.stubs import (
     update_signature_return,
 )
 from monkeytype.tracing import CallTrace
-from monkeytype.typing import NoneType, make_typed_dict
+from monkeytype.typing import NoneType, make_typed_dict, TypeGetter
 from mypy_extensions import TypedDict
 from .util import Dummy
 
 UserId = NewType('UserId', int)
 T = TypeVar("T")
+simple_getter = TypeGetter()
 
 
 class TestImportMap:
@@ -827,12 +828,12 @@ def untyped_helper(x, y):
 
 class TestStubIndexBuilder:
     def test_ignore_non_matching_functions(self):
-        b = StubIndexBuilder('foo.bar', max_typed_dict_size=0)
+        b = StubIndexBuilder('foo.bar', type_getter=simple_getter)
         b.log(CallTrace(untyped_helper, {'x': int, 'y': str}))
         assert len(b.index) == 0
 
     def test_build_index(self):
-        idxb = StubIndexBuilder('tests', max_typed_dict_size=0)
+        idxb = StubIndexBuilder('tests', type_getter=simple_getter)
         idxb.log(CallTrace(untyped_helper, {'x': int, 'y': str}, str))
         sig = Signature.from_callable(untyped_helper)
         sig = sig.replace(
@@ -1172,21 +1173,21 @@ class TestShrinkTracedTypes:
             CallTrace(tie_helper, {'a': str, 'b': int}),
             CallTrace(tie_helper, {'a': str, 'b': NoneType}),
         ]
-        assert shrink_traced_types(traces, max_typed_dict_size=0) == ({'a': str, 'b': Optional[int]}, None, None)
+        assert shrink_traced_types(traces, simple_getter) == ({'a': str, 'b': Optional[int]}, None, None)
 
     def test_shrink_return(self):
         traces = [
             CallTrace(tie_helper, {}, NoneType),
             CallTrace(tie_helper, {}, str),
         ]
-        assert shrink_traced_types(traces, max_typed_dict_size=0) == ({}, Optional[str], None)
+        assert shrink_traced_types(traces, simple_getter) == ({}, Optional[str], None)
 
     def test_shrink_yield(self):
         traces = [
             CallTrace(tie_helper, {}, yield_type=int),
             CallTrace(tie_helper, {}, yield_type=str),
         ]
-        assert shrink_traced_types(traces, max_typed_dict_size=0) == ({}, None, Union[int, str])
+        assert shrink_traced_types(traces, simple_getter) == ({}, None, Union[int, str])
 
 
 class Parent:
