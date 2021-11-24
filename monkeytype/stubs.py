@@ -580,6 +580,10 @@ class ClassStub(Stub):
         self._refs: List[ForwardRef] = []
 
     @property
+    def actual_name(self):
+        return re.sub('\(.*\)', '', self.name)
+
+    @property
     def _children(self):
         return list(itertools.chain.from_iterable([self.function_stubs.values(), self.attribute_stubs]))
 
@@ -592,7 +596,7 @@ class ClassStub(Stub):
 
     def update_refs(self):
         for ref in self._refs:
-            ref.__forward_arg__ = self.name
+            ref.__forward_arg__ = self.actual_name
         pass
 
     @property
