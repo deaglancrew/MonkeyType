@@ -582,14 +582,20 @@ class ClassStub(Stub):
         return list(itertools.chain.from_iterable([self.function_stubs.values(), self.attribute_stubs]))
 
     def render(self) -> str:
+        return self.get_template().format(name=self.name)
+
+    def get_template(self):
         parts = [
-            f'class {self.name}:',
+            'class {name}:',
             *[stub.render(prefix='    ')
               for stub in sorted(self.attribute_stubs, key=lambda stub: stub.name)],
             *[stub.render(prefix='    ')
               for _, stub in sorted(self.function_stubs.items())],
         ]
         return "\n".join(parts)
+
+    def __hash__(self):
+        return hash(self.get_template())
 
     def __repr__(self) -> str:
         return 'ClassStub(%s, %s, %s)' % (repr(self.name),
