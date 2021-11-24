@@ -25,6 +25,7 @@ from typing import (
     Set,
     Tuple,
     Union,
+    ForwardRef,
 )
 
 from mypy_extensions import TypedDict
@@ -576,6 +577,7 @@ class ClassStub(Stub):
         if function_stubs is not None:
             self.function_stubs = {stub.name: stub for stub in function_stubs}
         self._import_map = ImportMap()
+        self._refs: List[ForwardRef] = []
 
     @property
     def _children(self):
@@ -583,6 +585,19 @@ class ClassStub(Stub):
 
     def render(self) -> str:
         return self.get_template().format(name=self.name)
+
+    def add_ref(self, ref: ForwardRef) -> None:
+        self._refs.append(ref)
+        pass
+
+    def update_refs(self):
+        for ref in self._refs:
+            ref.__forward_arg__ = self.name
+        pass
+
+    @property
+    def references(self):
+        return self._refs
 
     def get_template(self):
         parts = [
@@ -593,9 +608,6 @@ class ClassStub(Stub):
               for _, stub in sorted(self.function_stubs.items())],
         ]
         return "\n".join(parts)
-
-    def __hash__(self):
-        return hash(self.get_template())
 
     def __repr__(self) -> str:
         return 'ClassStub(%s, %s, %s)' % (repr(self.name),
@@ -645,7 +657,7 @@ class ReplaceClassicalTypesWithStubs(TypeRewriter):
         return cls[elems]  # type: ignore
 
     def _add_class_stub(self, fields: Dict[str, type], class_name: str,
-                        base_classes: Tuple[type] = (TypedDict,), base_class_names: Optional[List[str]] = None, meta_flags: Dict[str, Any] = None) -> None:
+                        base_classes: Tuple[type] = (TypedDict,), base_class_names: Optional[List[str]] = None, meta_flags: Dict[str, Any] = None) -> ClassStub:
         attribute_stubs = []
         for name, typ in fields.items():
             rewritten_type, stubs = self.rewrite_and_get_stubs(typ, class_name_hint=name)
@@ -663,6 +675,7 @@ class ReplaceClassicalTypesWithStubs(TypeRewriter):
         for base in base_classes:
             stub.add_import(base.__module__, base.__name__)
         self.stubs.append(stub)
+        return stub
 
     def generic_rewrite(self, typ: type) -> type:
         if hasattr(typ, 'copy_with') and hasattr(typ, '__args__'):
@@ -674,10 +687,12 @@ class ReplaceClassicalTypesWithStubs(TypeRewriter):
             bases = typ.__bases__
         if hasattr(typ, '__annotations__') and typ.__module__ is None:
             class_name = _make_classical_stub_name(self._class_name_hint, 'Dummy' if not bases else bases[0].__name__)
-            self._add_class_stub(fields=typ.__annotations__,
+            stub = self._add_class_stub(fields=typ.__annotations__,
                                  class_name=class_name,
                                  base_classes=bases)
-            return make_forward_ref(class_name)
+            ref = make_forward_ref(class_name)
+            stub.add_ref(ref)
+            return ref
         return super().generic_rewrite(typ)
 
     def rewrite_anonymous_TypedDict(self, typed_dict: type) -> type:
