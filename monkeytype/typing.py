@@ -26,6 +26,7 @@ from typing import (
     Type,
     TypeVar,
     Union,
+    Optional,
 )
 from monkeytype.compat import (
     is_any,
@@ -75,68 +76,6 @@ def is_anonymous_typed_dict(typ: type) -> bool:
     return is_typed_dict(typ) and typ.__name__ == DUMMY_TYPED_DICT_NAME
 
 
-def shrink_typed_dict_types(typed_dicts: List[type], max_typed_dict_size: int) -> type:
-    """Shrink a list of TypedDicts into one with the required fields and the optional fields.
-    Required fields are keys that appear as a required field in all the TypedDicts.
-    Optional fields are those that appear as a required field in only some
-    of the TypedDicts or appear as a optional field in even one TypedDict.
-    If the same key has multiple value types, then its value is the Union of the value types."""
-    num_typed_dicts = len(typed_dicts)
-    key_value_types_dict = defaultdict(list)
-    existing_optional_fields = []
-    for typed_dict in typed_dicts:
-        required_fields, optional_fields = field_annotations(typed_dict)
-        for key, value_type in required_fields.items():
-            key_value_types_dict[key].append(value_type)
-        existing_optional_fields.extend(optional_fields.items())
-
-    required_fields = {key: value_types
-                       for key, value_types in key_value_types_dict.items()
-                       if len(value_types) == num_typed_dicts}
-    optional_fields = defaultdict(list)
-    for key, value_types in key_value_types_dict.items():
-        if len(value_types) != num_typed_dicts:
-            optional_fields[key] = value_types
-    for key, value_type in existing_optional_fields:
-        optional_fields[key].append(value_type)
-
-    if len(required_fields) + len(optional_fields) > max_typed_dict_size:
-        value_type = shrink_types(list(chain.from_iterable(chain(required_fields.values(),
-                                                                 optional_fields.values()))),
-                                  max_typed_dict_size)
-        return Dict[str, value_type]
-    required_fields = {key: shrink_types(list(value_types), max_typed_dict_size)
-                       for key, value_types in required_fields.items()}
-    optional_fields = {key: shrink_types(list(value_types), max_typed_dict_size)
-                       for key, value_types in optional_fields.items()}
-    return make_typed_dict(required_fields=required_fields, optional_fields=optional_fields)
-
-
-def shrink_types(types, max_typed_dict_size):
-    """Return the smallest type equivalent to Union[types].
-    If all the types are anonymous TypedDicts, shrink them ourselves.
-    Otherwise, recursively turn the anonymous TypedDicts into Dicts.
-    Union will handle deduplicating types (both by equality and subtype relationships)."""
-    types = tuple(types)
-    if len(types) == 0:
-        return Any
-    if all(is_anonymous_typed_dict(typ) for typ in types):
-        return shrink_typed_dict_types(types, max_typed_dict_size)
-    # Don't rewrite anonymous TypedDict to Dict if the types are all the same,
-    # such as [Tuple[TypedDict(...)], Tuple[TypedDict(...)]].
-    if all(types_equal(typ, types[0]) for typ in types[1:]):
-        return types[0]
-
-    # If they are all lists, shrink their argument types. This way, we avoid
-    # rewriting heterogenous anonymous TypedDicts to Dict.
-    if all(is_list(typ) for typ in types):
-        annotation = shrink_types((getattr(typ, '__args__')[0] for typ in types), max_typed_dict_size)
-        return List[annotation]
-
-    all_dict_types = tuple(RewriteAnonymousTypedDictToDict().rewrite(typ) for typ in types)
-    return Union[all_dict_types]
-
-
 def make_iterator(typ):
     return Iterator[typ]
 
@@ -154,47 +93,144 @@ _BUILTIN_CALLABLE_TYPES = (
 )
 
 
-def get_dict_type(dct, max_typed_dict_size):
-    """Return a TypedDict for `dct` if all the keys are strings.
-    Else, default to the union of the keys and of the values."""
-    if len(dct) == 0:
-        # Special-case this because returning an empty TypedDict is
-        # unintuitive, especially when you've "disabled" TypedDict generation
-        # by setting `max_typed_dict_size` to 0.
-        return Dict[Any, Any]
-    if (all(isinstance(k, str) for k in dct.keys())
-            and (max_typed_dict_size is None or len(dct) <= max_typed_dict_size)):
-        return make_typed_dict(required_fields={k: get_type(v, max_typed_dict_size) for k, v in dct.items()})
-    else:
-        key_type = shrink_types((get_type(k, max_typed_dict_size) for k in dct.keys()), max_typed_dict_size)
-        val_type = shrink_types((get_type(v, max_typed_dict_size) for v in dct.values()), max_typed_dict_size)
-        return Dict[key_type, val_type]
+class TypeHook(ABC):
+    @abstractmethod
+    def handles(self, typ) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    def convert_object(self, obj):
+        raise NotImplementedError
+
+    def can_shrink(self, types: Iterable) -> bool:
+        return False
+
+    def shrink_types(self, types: list):
+        return types
+
+    def register_type_getter(self, getter):
+        self._getter = getter
+        pass
 
 
-def get_type(obj, max_typed_dict_size):
-    """Return the static type that would be used in a type hint"""
-    if isinstance(obj, type):
-        return Type[obj]
-    elif isinstance(obj, _BUILTIN_CALLABLE_TYPES):
-        return Callable
-    elif isinstance(obj, types.GeneratorType):
-        return Iterator[Any]
-    typ = type(obj)
-    if typ is list:
-        elem_type = shrink_types((get_type(e, max_typed_dict_size) for e in obj), max_typed_dict_size)
-        return List[elem_type]
-    elif typ is set:
-        elem_type = shrink_types((get_type(e, max_typed_dict_size) for e in obj), max_typed_dict_size)
-        return Set[elem_type]
-    elif typ is dict:
-        return get_dict_type(obj, max_typed_dict_size)
-    elif typ is defaultdict:
-        key_type = shrink_types((get_type(k, max_typed_dict_size) for k in obj.keys()), max_typed_dict_size)
-        val_type = shrink_types((get_type(v, max_typed_dict_size) for v in obj.values()), max_typed_dict_size)
-        return DefaultDict[key_type, val_type]
-    elif typ is tuple:
-        return Tuple[tuple(get_type(e, max_typed_dict_size) for e in obj)]
-    return typ
+class TypedDictHook(TypeHook):
+    def __init__(self, max_typed_dict_size: int):
+        self._max_typed_dict_size = max_typed_dict_size
+
+    def handles(self, obj) -> bool:
+        return isinstance(obj, dict) and all(isinstance(k, str) for k in obj.keys()) and 0 < len(
+            obj) <= self._max_typed_dict_size
+
+    def convert_object(self, obj):
+        return make_typed_dict(required_fields={
+            key: self._getter.get_type(value) for key, value in obj.items()
+        })
+
+    def can_shrink(self, types: List[type]) -> bool:
+        return all(is_anonymous_typed_dict(typ) for typ in types) and len(types) > 0
+
+    def shrink_types(self, types: List[type]):
+        """Shrink a list of TypedDicts into one with the required fields and the optional fields.
+        Required fields are keys that appear as a required field in all the TypedDicts.
+        Optional fields are those that appear as a required field in only some
+        of the TypedDicts or appear as a optional field in even one TypedDict.
+        If the same key has multiple value types, then its value is the Union of the value types."""
+        num_typed_dicts = len(types)
+        key_value_types_dict = defaultdict(list)
+        existing_optional_fields = []
+        for typed_dict in types:
+            required_fields, optional_fields = field_annotations(typed_dict)
+            for key, value_type in required_fields.items():
+                key_value_types_dict[key].append(value_type)
+            existing_optional_fields.extend(optional_fields.items())
+
+        required_fields = {key: value_types
+                           for key, value_types in key_value_types_dict.items()
+                           if len(value_types) == num_typed_dicts}
+        optional_fields = defaultdict(list)
+        for key, value_types in key_value_types_dict.items():
+            if len(value_types) != num_typed_dicts:
+                optional_fields[key] = value_types
+        for key, value_type in existing_optional_fields:
+            optional_fields[key].append(value_type)
+
+        if len(required_fields) + len(optional_fields) > self._max_typed_dict_size:
+            value_type = self._getter.shrink_types(list(chain.from_iterable(chain(required_fields.values(),
+                                                                     optional_fields.values()))))
+            return Dict[str, value_type]
+        required_fields = {key: self._getter.shrink_types(list(value_types))
+                           for key, value_types in required_fields.items()}
+        optional_fields = {key: self._getter.shrink_types(list(value_types))
+                           for key, value_types in optional_fields.items()}
+        return make_typed_dict(required_fields=required_fields, optional_fields=optional_fields)
+
+
+class TypeGetter:
+    def __init__(self, handlers: Optional[List[TypeHook]] = None):
+        self._handlers = []
+        if handlers is not None:
+            for handler in handlers:
+                self.add_handler(handler)
+
+    def add_handler(self, hook: TypeHook):
+        hook.register_type_getter(self)
+        self._handlers.insert(0, hook)
+
+    def get_type(self, obj):
+        for handler in self._handlers:
+            if handler.handles(obj):
+                return handler.convert_object(obj)
+        if isinstance(obj, type):
+            return Type[obj]
+        elif isinstance(obj, _BUILTIN_CALLABLE_TYPES):
+            return Callable
+        elif isinstance(obj, types.GeneratorType):
+            return Iterator[Any]
+        typ = type(obj)
+        if typ is list:
+            elem_type = self.shrink_types([self.get_type(e) for e in obj])
+            return List[elem_type]
+        elif typ is set:
+            elem_type = self.shrink_types([self.get_type(e) for e in obj])
+            return Set[elem_type]
+        elif typ is dict:
+            if len(obj) == 0:
+                # Special-case this because returning an empty TypedDict is
+                # unintuitive, especially when you've "disabled" TypedDict generation
+                # by setting `max_typed_dict_size` to 0.
+                return Dict[Any, Any]
+            else:
+                key_type = self.shrink_types([self.get_type(k) for k in obj.keys()])
+                val_type = self.shrink_types([self.get_type(v) for v in obj.values()])
+                return Dict[key_type, val_type]
+        elif typ is defaultdict:
+            key_type = self.shrink_types([self.get_type(k) for k in obj.keys()])
+            val_type = self.shrink_types([self.get_type(v) for v in obj.values()])
+            return DefaultDict[key_type, val_type]
+        elif typ is tuple:
+            return Tuple[tuple(self.get_type(e) for e in obj)]
+        return typ
+
+    def shrink_types(self, types: List[type]):
+        for handler in self._handlers:
+            if handler.can_shrink(types):
+                return handler.shrink_types(types)
+        types = tuple(types)
+        if len(types) == 0:
+            return Any
+        # Don't rewrite anonymous TypedDict to Dict if the types are all the same,
+        # such as [Tuple[TypedDict(...)], Tuple[TypedDict(...)]].
+        if all(types_equal(typ, types[0]) for typ in types[1:]):
+            return types[0]
+
+        # If they are all lists, shrink their argument types. This way, we avoid
+        # rewriting heterogenous anonymous TypedDicts to Dict.
+        if all(is_list(typ) for typ in types):
+            annotation = self.shrink_types([getattr(typ, '__args__')[0] for typ in types])
+            return List[annotation]
+
+        all_dict_types = tuple(RewriteAnonymousTypedDictToDict().rewrite(typ) for typ in types)
+        return Union[all_dict_types]
 
 
 NoneType = type(None)

@@ -125,7 +125,7 @@ def get_stub(args: argparse.Namespace, stdout: IO, stderr: IO) -> Optional[Stub]
         rewriter = NoOpRewriter()
     stubs = build_module_stubs_from_traces(
         traces,
-        args.config.max_typed_dict_size(),
+        args.config.type_getter(),
         existing_annotation_strategy=args.existing_annotation_strategy,
         rewriter=rewriter,
     )

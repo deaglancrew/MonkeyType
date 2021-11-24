@@ -32,7 +32,7 @@ try:
 except ImportError:
     cached_property = None
 
-from monkeytype.typing import get_type
+from monkeytype.typing import TypeGetter, TypedDictHook
 from monkeytype.util import get_func_fqname
 
 
@@ -190,7 +190,8 @@ class CallTracer:
     def __init__(
         self,
         logger: CallTraceLogger,
-        max_typed_dict_size: int,
+        max_typed_dict_size: int = 0,
+        type_getter: TypeGetter = None,
         code_filter: Optional[CodeFilter] = None,
         sample_rate: Optional[int] = None,
     ) -> None:
@@ -199,7 +200,11 @@ class CallTracer:
         self.sample_rate = sample_rate
         self.cache: Dict[CodeType, Optional[Callable]] = {}
         self.should_trace = code_filter
-        self.max_typed_dict_size = max_typed_dict_size
+        if type_getter is None:
+            type_getter = TypeGetter()
+            if max_typed_dict_size > 0:
+                type_getter.add_handler(TypedDictHook(max_typed_dict_size=max_typed_dict_size))
+        self.type_getter = type_getter
 
     def _get_func(self, frame: FrameType) -> Optional[Callable]:
         code = frame.f_code
@@ -222,8 +227,7 @@ class CallTracer:
         arg_types = {}
         for name in arg_names:
             if name in frame.f_locals:
-                arg_types[name] = get_type(frame.f_locals[name],
-                                           max_typed_dict_size=self.max_typed_dict_size)
+                arg_types[name] = self.type_getter.get_type(frame.f_locals[name])
         self.traces[frame] = CallTrace(func, arg_types)
 
     def handle_return(self, frame: FrameType, arg: Any) -> None:
@@ -233,7 +237,7 @@ class CallTracer:
         # from a function returning (or yielding) None. In the latter case, the
         # the last instruction that was executed should always be a return or a
         # yield.
-        typ = get_type(arg, max_typed_dict_size=self.max_typed_dict_size)
+        typ = self.type_getter.get_type(arg)
         last_opcode = frame.f_code.co_code[frame.f_lasti]
         trace = self.traces.get(frame)
         if trace is None:
@@ -269,13 +273,18 @@ class CallTracer:
 @contextmanager
 def trace_calls(
     logger: CallTraceLogger,
-    max_typed_dict_size: int,
+    max_typed_dict_size: int = 0,
+    type_getter: TypeGetter = None,
     code_filter: Optional[CodeFilter] = None,
     sample_rate: Optional[int] = None,
 ) -> Iterator[None]:
     """Enable call tracing for a block of code"""
     old_trace = sys.getprofile()
-    sys.setprofile(CallTracer(logger, max_typed_dict_size, code_filter, sample_rate))
+    if type_getter is None:
+        type_getter = TypeGetter()
+    if max_typed_dict_size > 0:
+        type_getter.add_handler(TypedDictHook(max_typed_dict_size=max_typed_dict_size))
+    sys.setprofile(CallTracer(logger, type_getter=type_getter, code_filter=code_filter, sample_rate=sample_rate))
     try:
         yield
     finally:

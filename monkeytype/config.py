@@ -15,7 +15,7 @@ from abc import (
     abstractmethod,
 )
 from types import CodeType
-from typing import Optional, Iterator
+from typing import Optional, Iterator, List
 
 from monkeytype.db.base import (
     CallTraceStore,
@@ -30,6 +30,9 @@ from monkeytype.typing import (
     DEFAULT_REWRITER,
     NoOpRewriter,
     TypeRewriter,
+    TypeGetter,
+    TypeHook,
+    TypedDictHook
 )
 
 
@@ -88,6 +91,15 @@ class Config(metaclass=ABCMeta):
     def max_typed_dict_size(self) -> int:
         """Size up to which a dictionary will be traced as a TypedDict."""
         return 0
+
+    def type_hooks(self) -> List[TypeHook]:
+        if self.max_typed_dict_size() > 0:
+            return [TypedDictHook(max_typed_dict_size=self.max_typed_dict_size())]
+        return []
+
+    def type_getter(self) -> TypeGetter:
+        return TypeGetter(self.type_hooks())
+
 
 
 lib_paths = {sysconfig.get_path(n) for n in ['stdlib', 'purelib', 'platlib']}

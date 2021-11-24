@@ -29,11 +29,11 @@ from monkeytype.typing import (
     RewriteLargeUnion,
     RewriteAnonymousTypedDictToDict,
     field_annotations,
-    get_type,
+    TypeGetter,
+    TypedDictHook,
     is_list,
     is_typed_dict,
     make_typed_dict,
-    shrink_types,
     types_equal,
     RewriteGenerator,
     TypeRewriter,
@@ -49,6 +49,21 @@ from .util import Dummy
 
 VERY_LARGE_MAX_TYPED_DICT_SIZE = 200
 
+_simple_get_type = TypeGetter()
+
+
+def get_type(obj, max_typed_dict_size: int = 0):
+    if max_typed_dict_size == 0:
+        return _simple_get_type.get_type(obj)
+    getter = TypeGetter([TypedDictHook(max_typed_dict_size)])
+    return getter.get_type(obj)
+
+
+def shrink_types(types, max_typed_dict_size: int = 0):
+    if max_typed_dict_size == 0:
+        return _simple_get_type.shrink_types(list(types))
+    getter = TypeGetter([TypedDictHook(max_typed_dict_size)])
+    return getter.shrink_types(list(types))
 
 class TestTypesEqual:
     @pytest.mark.parametrize(

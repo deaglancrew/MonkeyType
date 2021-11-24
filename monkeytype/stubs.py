@@ -55,7 +55,7 @@ from monkeytype.typing import (
     TypeRewriter,
     make_generator,
     make_iterator,
-    shrink_types,
+    TypeGetter,
 )
 from monkeytype.util import get_name_in_module
 
@@ -220,7 +220,7 @@ def update_signature_return(
 
 def shrink_traced_types(
     traces: Iterable[CallTrace],
-    max_typed_dict_size: int,
+    type_getter: TypeGetter,
 ) -> Tuple[Dict[str, type], Optional[type], Optional[type]]:
     """Merges the traced types and returns the minimally equivalent types"""
     arg_types: DefaultDict[str, Set[type]] = collections.defaultdict(set)
@@ -233,9 +233,9 @@ def shrink_traced_types(
             return_types.add(t.return_type)
         if t.yield_type is not None:
             yield_types.add(t.yield_type)
-    shrunken_arg_types = {name: shrink_types(ts, max_typed_dict_size) for name, ts in arg_types.items()}
-    return_type = shrink_types(return_types, max_typed_dict_size) if return_types else None
-    yield_type = shrink_types(yield_types, max_typed_dict_size) if yield_types else None
+    shrunken_arg_types = {name: type_getter.shrink_types(ts) for name, ts in arg_types.items()}
+    return_type = type_getter.shrink_types(return_types) if return_types else None
+    yield_type = type_getter.shrink_types(yield_types) if yield_types else None
     return (shrunken_arg_types, return_type, yield_type)
 
 
@@ -750,14 +750,14 @@ class FunctionDefinition:
 def get_updated_definition(
     func: Callable,
     traces: Iterable[CallTrace],
-    max_typed_dict_size: int,
+    type_getter: TypeGetter,
     rewriter: Optional[TypeRewriter] = None,
     existing_annotation_strategy: ExistingAnnotationStrategy = ExistingAnnotationStrategy.REPLICATE,
 ) -> FunctionDefinition:
     """Update the definition for func using the types collected in traces."""
     if rewriter is None:
         rewriter = NoOpRewriter()
-    arg_types, return_type, yield_type = shrink_traced_types(traces, max_typed_dict_size)
+    arg_types, return_type, yield_type = shrink_traced_types(traces, type_getter)
     arg_types = {name: rewriter.rewrite(typ) for name, typ in arg_types.items()}
     if return_type is not None:
         return_type = rewriter.rewrite(return_type)
@@ -804,7 +804,7 @@ def build_module_stubs(entries: Iterable[FunctionDefinition]) -> Dict[str, Modul
 
 def build_module_stubs_from_traces(
     traces: Iterable[CallTrace],
-    max_typed_dict_size: int,
+    type_getter: TypeGetter,
     existing_annotation_strategy: ExistingAnnotationStrategy = ExistingAnnotationStrategy.REPLICATE,
     rewriter: Optional[TypeRewriter] = None,
 ) -> Dict[str, ModuleStub]:
@@ -814,7 +814,7 @@ def build_module_stubs_from_traces(
         index[trace.func].add(trace)
     defns = []
     for func, traces in index.items():
-        defn = get_updated_definition(func, traces, max_typed_dict_size, rewriter, existing_annotation_strategy)
+        defn = get_updated_definition(func, traces, type_getter, rewriter, existing_annotation_strategy)
         defns.append(defn)
     return build_module_stubs(defns)
 
@@ -822,10 +822,10 @@ def build_module_stubs_from_traces(
 class StubIndexBuilder(CallTraceLogger):
     """Builds type stub index directly from collected call traces."""
 
-    def __init__(self, module_re: str, max_typed_dict_size: int) -> None:
+    def __init__(self, module_re: str, type_getter: TypeGetter) -> None:
         self.re = re.compile(module_re)
         self.index: DefaultDict[Callable, Set[CallTrace]] = collections.defaultdict(set)
-        self.max_typed_dict_size = max_typed_dict_size
+        self.type_getter = type_getter
 
     def log(self, trace: CallTrace) -> None:
         if not self.re.match(trace.funcname):
@@ -833,6 +833,6 @@ class StubIndexBuilder(CallTraceLogger):
         self.index[trace.func].add(trace)
 
     def get_stubs(self) -> Dict[str, ModuleStub]:
-        defs = (get_updated_definition(func, traces, self.max_typed_dict_size)
+        defs = (get_updated_definition(func, traces, self.type_getter)
                 for func, traces in self.index.items())
         return build_module_stubs(defs)
