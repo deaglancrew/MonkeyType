@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS {table} (
   yield_type  TEXT);
 """.format(table=table)
     with conn:
-        conn.execute(query)
+        cur = conn.cursor()
+        cur.execute(query)
 
 
 QueryValue = Union[str, int]
@@ -64,23 +65,26 @@ def make_query(table: str, module: str, qualname: Optional[str], limit: int) -> 
     raw_query += """
     GROUP BY
         module, qualname, arg_types, return_type, yield_type
-    ORDER BY date(created_at) DESC
     LIMIT ?
     """
     values.append(limit)
     return raw_query, values
 
 
-class SQLiteStore(CallTraceStore):
-    def __init__(self, conn: sqlite3.Connection, table: str = DEFAULT_TABLE) -> None:
+class DBApi2Store(CallTraceStore):
+    def __init__(self, conn, table: str = DEFAULT_TABLE) -> None:
         self.conn = conn
         self.table = table
 
     @classmethod
     def make_store(cls, connection_string: str) -> 'CallTraceStore':
-        conn = sqlite3.connect(connection_string)
+        conn = cls.make_connection(connection_string)
         create_call_trace_table(conn)
         return cls(conn)
+
+    @staticmethod
+    def make_connection(connection_string):
+        raise NotImplementedError
 
     def add(self, traces: Iterable[CallTrace]) -> None:
         values = []
@@ -114,3 +118,10 @@ class SQLiteStore(CallTraceStore):
                         ORDER BY date(created_at) DESC
                         """.format(table=self.table))
             return [row[0] for row in cur.fetchall() if row[0]]
+
+
+class SQLiteStore(DBApi2Store):
+    @staticmethod
+    def make_connection(connection_string):
+        return sqlite3.connect(connection_string)
+
