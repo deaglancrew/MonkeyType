@@ -25,6 +25,7 @@ from typing import (
     Set,
     Tuple,
     Union,
+    ForwardRef,
 )
 
 from mypy_extensions import TypedDict
@@ -61,7 +62,7 @@ from monkeytype.typing import (
     TypeGetter,
 )
 from monkeytype.util import get_name_in_module
-
+from monkeytype.stub_processing import dedupe_module
 
 logger = logging.getLogger(__name__)
 
@@ -576,14 +577,35 @@ class ClassStub(Stub):
         if function_stubs is not None:
             self.function_stubs = {stub.name: stub for stub in function_stubs}
         self._import_map = ImportMap()
+        self._refs: List[ForwardRef] = []
+
+    @property
+    def actual_name(self):
+        return re.sub('\(.*\)', '', self.name)
 
     @property
     def _children(self):
         return list(itertools.chain.from_iterable([self.function_stubs.values(), self.attribute_stubs]))
 
     def render(self) -> str:
+        return self.get_template().format(name=self.name)
+
+    def add_ref(self, ref: ForwardRef) -> None:
+        self._refs.append(ref)
+        pass
+
+    def update_refs(self):
+        for ref in self._refs:
+            ref.__forward_arg__ = self.actual_name
+        pass
+
+    @property
+    def references(self):
+        return self._refs
+
+    def get_template(self):
         parts = [
-            f'class {self.name}:',
+            'class {name}:',
             *[stub.render(prefix='    ')
               for stub in sorted(self.attribute_stubs, key=lambda stub: stub.name)],
             *[stub.render(prefix='    ')
@@ -639,7 +661,7 @@ class ReplaceClassicalTypesWithStubs(TypeRewriter):
         return cls[elems]  # type: ignore
 
     def _add_class_stub(self, fields: Dict[str, type], class_name: str,
-                        base_classes: Tuple[type] = (TypedDict,), base_class_names: Optional[List[str]] = None, meta_flags: Dict[str, Any] = None) -> None:
+                        base_classes: Tuple[type] = (TypedDict,), base_class_names: Optional[List[str]] = None, meta_flags: Dict[str, Any] = None) -> ClassStub:
         attribute_stubs = []
         for name, typ in fields.items():
             rewritten_type, stubs = self.rewrite_and_get_stubs(typ, class_name_hint=name)
@@ -657,6 +679,7 @@ class ReplaceClassicalTypesWithStubs(TypeRewriter):
         for base in base_classes:
             stub.add_import(base.__module__, base.__name__)
         self.stubs.append(stub)
+        return stub
 
     def generic_rewrite(self, typ: type) -> type:
         if hasattr(typ, 'copy_with') and hasattr(typ, '__args__'):
@@ -668,10 +691,12 @@ class ReplaceClassicalTypesWithStubs(TypeRewriter):
             bases = typ.__bases__
         if hasattr(typ, '__annotations__') and typ.__module__ is None:
             class_name = _make_classical_stub_name(self._class_name_hint, 'Dummy' if not bases else bases[0].__name__)
-            self._add_class_stub(fields=typ.__annotations__,
+            stub = self._add_class_stub(fields=typ.__annotations__,
                                  class_name=class_name,
                                  base_classes=bases)
-            return make_forward_ref(class_name)
+            ref = make_forward_ref(class_name)
+            stub.add_ref(ref)
+            return ref
         return super().generic_rewrite(typ)
 
     def rewrite_anonymous_TypedDict(self, typed_dict: type) -> type:
@@ -726,6 +751,7 @@ class ModuleStub(Stub):
 
     def render(self) -> str:
         parts = []
+        self._fix_generated_class_names()
         if self.imports_stub.imports:
             parts.append(self.imports_stub.render())
         for generated_class_stub in sorted(self.generated_class_stubs, key=lambda s: s.name):
@@ -735,6 +761,15 @@ class ModuleStub(Stub):
         for class_stub in sorted(self.class_stubs.values(), key=lambda s: s.name):
             parts.append(class_stub.render())
         return self.import_map.update_render("\n\n\n".join(parts))
+
+    def _fix_generated_class_names(self):
+        previously_seen_names = set()
+        for stub in self.generated_class_stubs:
+            if stub.actual_name in previously_seen_names:
+                stub.name = "a" + stub.name
+                stub.update_refs()
+            previously_seen_names.add(stub.actual_name)
+        pass
 
     def __repr__(self) -> str:
         return 'ModuleStub(%s, %s, %s, %s)' % (
@@ -885,6 +920,7 @@ def build_module_stubs_from_traces(
     type_getter: TypeGetter,
     existing_annotation_strategy: ExistingAnnotationStrategy = ExistingAnnotationStrategy.REPLICATE,
     rewriter: Optional[TypeRewriter] = None,
+    dedupe: bool = False,
 ) -> Dict[str, ModuleStub]:
     """Given an iterable of call traces, build the corresponding stubs."""
     index: DefaultDict[Callable, Set[CallTrace]] = collections.defaultdict(set)
@@ -894,7 +930,11 @@ def build_module_stubs_from_traces(
     for func, traces in index.items():
         defn = get_updated_definition(func, traces, type_getter, rewriter, existing_annotation_strategy)
         defns.append(defn)
-    return build_module_stubs(defns)
+    module_stubs = build_module_stubs(defns)
+    if dedupe:
+        for module in module_stubs.values():
+            dedupe_module(module)
+    return module_stubs
 
 
 class StubIndexBuilder(CallTraceLogger):

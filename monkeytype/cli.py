@@ -128,6 +128,7 @@ def get_stub(args: argparse.Namespace, stdout: IO, stderr: IO) -> Optional[Stub]
         args.config.type_getter(),
         existing_annotation_strategy=args.existing_annotation_strategy,
         rewriter=rewriter,
+        dedupe=args.config.dedupe_generated_classes(),
     )
     if args.sample_count:
         display_sample_count(traces, stderr)
