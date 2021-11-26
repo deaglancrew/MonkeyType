@@ -751,6 +751,7 @@ class ModuleStub(Stub):
 
     def render(self) -> str:
         parts = []
+        self._fix_generated_class_names()
         if self.imports_stub.imports:
             parts.append(self.imports_stub.render())
         for generated_class_stub in sorted(self.generated_class_stubs, key=lambda s: s.name):
@@ -760,6 +761,15 @@ class ModuleStub(Stub):
         for class_stub in sorted(self.class_stubs.values(), key=lambda s: s.name):
             parts.append(class_stub.render())
         return self.import_map.update_render("\n\n\n".join(parts))
+
+    def _fix_generated_class_names(self):
+        previously_seen_names = set()
+        for stub in self.generated_class_stubs:
+            if stub.actual_name in previously_seen_names:
+                stub.name = "a" + stub.name
+                stub.update_refs()
+            previously_seen_names.add(stub.actual_name)
+        pass
 
     def __repr__(self) -> str:
         return 'ModuleStub(%s, %s, %s, %s)' % (
