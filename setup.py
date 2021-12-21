@@ -45,7 +45,8 @@ setup(
         ]
     },
     python_requires='>=3.6',
-    install_requires=['mypy_extensions', 'libcst>=0.3.7', 'psycopg2'],
+    install_requires=['mypy_extensions', 'libcst>=0.3.7'],
+    extras_require={'pandera': ['pandera']},
     classifiers=[
         'Development Status :: 5 - Production/Stable',
         'Intended Audience :: Developers',
