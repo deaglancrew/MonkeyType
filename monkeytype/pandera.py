@@ -33,7 +33,7 @@ def _schema_to_model(schema: Union[DataFrameSchema, SeriesSchema]):
 
 def _series_schema_to_type(schema: pa.schemas.SeriesSchema):
     try:
-        return Series[schema.dtype.type.type]
+        return Series[schema.dtype.__class__]
     except TypeError:
         return Series[object_]
 
