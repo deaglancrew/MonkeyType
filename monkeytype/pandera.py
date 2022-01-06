@@ -1,27 +1,32 @@
 from types import new_class
-from typing import Union
 
 import pandas as pd
 import pandera as pa
-from numpy import object_
-from pandera.schemas import SeriesSchema, DataFrameSchema
-from pandera.typing import DataFrame, Series
+from pandera.typing import DataFrame
 
 from monkeytype.typing import TypeHook
 
 DUMMY_MODEL_NAME = "DUMMY_PANDERA_MODEL"
 
 
-def _get_series(column):
-    new_series = _series_schema_to_type(column)
-    new_series._name = None
-    return new_series
+from pandera.typing import Series
+from pandera.engines import numpy_engine
+import builtins
 
 
-def _schema_to_model(schema: Union[DataFrameSchema, SeriesSchema]):
-    if isinstance(schema, SeriesSchema):
-        return _series_schema_to_type(schema)
-    annotations = {column.name: _get_series(column) for column in schema.columns.values()}
+def get_column_type(column, example=None):
+    if isinstance(column.dtype, numpy_engine.Object) and example is not None:
+        numpy_engine_result = numpy_engine.Engine.dtype(example.__class__)
+        if hasattr(builtins, str(numpy_engine_result)):
+            return getattr(builtins, str(numpy_engine_result))
+        return numpy_engine_result
+    return column.dtype.__class__
+
+
+def df_to_model(df):
+    annotations = {}
+    for column_name in df:
+        annotations[column_name] = series_to_type(df[column_name])
 
     def update_namespace(ns):
         ns["__annotations__"] = annotations
@@ -31,11 +36,13 @@ def _schema_to_model(schema: Union[DataFrameSchema, SeriesSchema]):
     return DataFrame[model]
 
 
-def _series_schema_to_type(schema: pa.schemas.SeriesSchema):
-    try:
-        return Series[schema.dtype.__class__]
-    except TypeError:
-        return Series[object_]
+def series_to_type(series):
+    series_schema = pa.infer_schema(series)
+    example = None
+    if len(series) > 0:
+        example = series[0]
+    output = Series[get_column_type(series_schema, example)]
+    return output
 
 
 class PanderaDataFrame(TypeHook):
@@ -43,5 +50,8 @@ class PanderaDataFrame(TypeHook):
         return isinstance(typ, pd.DataFrame) or isinstance(typ, pd.Series)
 
     def convert_object(self, obj):
-        schema = pa.infer_schema(obj)
-        return _schema_to_model(schema)
+        if isinstance(obj, pd.DataFrame):
+            print(obj)
+            return df_to_model(obj)
+        return series_to_type(obj)
+
