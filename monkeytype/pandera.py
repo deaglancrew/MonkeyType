@@ -44,11 +44,9 @@ def get_index_annotations(df):
 
 
 def df_to_model(df):
-    annotations = {}
+    annotations = get_index_annotations(df)
     for column_name in df:
         annotations[column_name] = series_to_type(df[column_name])
-
-    annotations.update(get_index_annotations(df))
 
     def update_namespace(ns):
         ns["__annotations__"] = annotations
@@ -73,7 +71,6 @@ class PanderaDataFrame(TypeHook):
 
     def convert_object(self, obj):
         if isinstance(obj, pd.DataFrame):
-            print(obj)
             return df_to_model(obj)
         return series_to_type(obj)
 
