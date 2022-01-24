@@ -11,6 +11,9 @@ DUMMY_MODEL_NAME = "DUMMY_PANDERA_MODEL"
 
 from pandera.typing import Series, Index
 from pandera.engines import numpy_engine
+from pandas import Index as pandasIndex
+from pandas import RangeIndex
+from typing import NamedTuple
 import builtins
 
 
@@ -23,7 +26,15 @@ def get_column_type(column, example=None):
     return column.dtype.__class__
 
 
+class _PanderaIntegerIndex(NamedTuple):
+    dtype = 1
+    name = None
+
+
 def get_indices(df):
+    if isinstance(df.index, pandasIndex):
+        yield None, _PanderaIntegerIndex
+        return
     try:
         df_schema = pa.infer_schema(df)
     except TypeError:
@@ -65,6 +76,8 @@ def df_to_model(df):
 
 
 def series_to_type(series):
+    if len(series.dropna()) == 0:
+        return Series[object]
     try:
         series_schema = pa.infer_schema(series)
     except TypeError:
