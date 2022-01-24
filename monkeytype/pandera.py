@@ -33,10 +33,7 @@ class _PanderaIntegerIndex(NamedTuple):
 
 def get_indices(df):
     if isinstance(df.index, pandasIndex):
-        if hasattr(pandasIndex, 'name'):
-            yield None, _PanderaIntegerIndex(name=pandasIndex.name)
-        else:
-            yield None, _PanderaIntegerIndex()
+        yield None, _PanderaIntegerIndex()
         return
     try:
         df_schema = pa.infer_schema(df)
@@ -58,7 +55,7 @@ def convert_indices_to_annotations(df):
         else:
             index_type = get_column_type(index, example=df.index[0])
             name = index.name or 'idx'
-        yield name, index_type
+        yield str(name), index_type
 
 
 def get_index_annotations(df):
