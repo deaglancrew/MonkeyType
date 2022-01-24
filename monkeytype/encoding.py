@@ -315,4 +315,4 @@ def serialize_traces(traces: Iterable[CallTrace]) -> Iterable[CallTraceRow]:
         try:
             yield CallTraceRow.from_trace(trace)
         except Exception:
-            logger.exception("Failed to serialize trace")
+            logger.exception(f"Failed to serialize trace for {trace.func}")
