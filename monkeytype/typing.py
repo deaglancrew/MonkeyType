@@ -179,10 +179,7 @@ class TypeGetter:
     def get_type(self, obj):
         for handler in self._handlers:
             if handler.handles(obj):
-                try:
-                    return handler.convert_object(obj)
-                except TypeError:
-                    continue
+                return handler.convert_object(obj)
         if isinstance(obj, type):
             return Type[obj]
         elif isinstance(obj, _BUILTIN_CALLABLE_TYPES):
