@@ -36,7 +36,7 @@ TypeDict = Dict[str, Any]
 class TypeTrace(abc.ABC):
     def __init__(self, typ, typename: Optional[str] = None):
         self.type = typ
-        self.typename = typename or typ.__qualname__
+        self.typename = typename or getattr(typ,  '__qualname__', getattr(typ, '__name__'))
 
     @abc.abstractmethod
     def to_dict(self) -> TypeDict:

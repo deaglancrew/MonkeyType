@@ -33,7 +33,10 @@ class _PanderaIntegerIndex(NamedTuple):
 
 def get_indices(df):
     if isinstance(df.index, pandasIndex):
-        yield None, _PanderaIntegerIndex
+        if hasattr(pandasIndex, 'name'):
+            yield None, _PanderaIntegerIndex(name=pandasIndex.name)
+        else:
+            yield None, _PanderaIntegerIndex
         return
     try:
         df_schema = pa.infer_schema(df)
