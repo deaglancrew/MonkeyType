@@ -27,7 +27,7 @@ def get_indices(df):
     try:
         df_schema = pa.infer_schema(df)
     except TypeError:
-        print("Failed to infer schema type")
+        print(f"DEBUG: Failed to infer schema index type : {df.index}")
         return
     index = df_schema.index
     if hasattr(index, 'indexes'):
@@ -68,7 +68,7 @@ def series_to_type(series):
     try:
         series_schema = pa.infer_schema(series)
     except TypeError:
-        print("Failed to infer type for column")
+        print(f"DEBUG: Failed to infer type for column: {series}")
         return Series[object]
     example = None
     if len(series) > 0:
