@@ -9,7 +9,7 @@ from monkeytype.typing import TypeHook
 DUMMY_MODEL_NAME = "DUMMY_PANDERA_MODEL"
 
 
-from pandera.typing import Series
+from pandera.typing import Series, Index
 from pandera.engines import numpy_engine
 import builtins
 
@@ -23,10 +23,32 @@ def get_column_type(column, example=None):
     return column.dtype.__class__
 
 
+def get_indices(df):
+    df_schema = pa.infer_schema(df)
+    index = df_schema.index
+    if hasattr(index, 'indexes'):
+        yield from index.indexes
+    else:
+        yield index
+
+
+def convert_indices_to_annotations(df):
+    for level, index in enumerate(get_indices(df)):
+        index_type = get_column_type(index, example=df.index[0][level])
+        name = f"INDEX_{level}_{index.name or 'idx'}"
+        yield name, index_type
+
+
+def get_index_annotations(df):
+    return {name: Index[index_type] for name, index_type in convert_indices_to_annotations(df)}
+
+
 def df_to_model(df):
     annotations = {}
     for column_name in df:
         annotations[column_name] = series_to_type(df[column_name])
+
+    annotations.update(get_index_annotations(df))
 
     def update_namespace(ns):
         ns["__annotations__"] = annotations
