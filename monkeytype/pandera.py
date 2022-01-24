@@ -28,7 +28,7 @@ def get_column_type(column, example=None):
 
 class _PanderaIntegerIndex(NamedTuple):
     dtype = 1
-    name = None
+    name: str = None
 
 
 def get_indices(df):
