@@ -36,7 +36,7 @@ def get_indices(df):
         if hasattr(pandasIndex, 'name'):
             yield None, _PanderaIntegerIndex(name=pandasIndex.name)
         else:
-            yield None, _PanderaIntegerIndex
+            yield None, _PanderaIntegerIndex()
         return
     try:
         df_schema = pa.infer_schema(df)
