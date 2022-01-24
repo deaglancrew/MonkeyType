@@ -27,15 +27,19 @@ def get_indices(df):
     df_schema = pa.infer_schema(df)
     index = df_schema.index
     if hasattr(index, 'indexes'):
-        yield from index.indexes
+        yield from enumerate(index.indexes)
     else:
-        yield index
+        yield None, index
 
 
 def convert_indices_to_annotations(df):
-    for level, index in enumerate(get_indices(df)):
-        index_type = get_column_type(index, example=df.index[0][level])
-        name = f"INDEX_{level}_{index.name or 'idx'}"
+    for level, index in get_indices(df):
+        if level is not None:
+            index_type = get_column_type(index, example=df.index[0][level])
+            name = f"INDEX_{level}_{index.name or 'idx'}"
+        else:
+            index_type = get_column_type(index, example=df.index[0])
+            name = index.name or 'idx'
         yield name, index_type
 
 
