@@ -36,12 +36,7 @@ TypeDict = Dict[str, Any]
 class TypeTrace(abc.ABC):
     def __init__(self, typ, typename: Optional[str] = None):
         self.type = typ
-        try:
-            self.typename = typename or getattr(typ,  '__qualname__', getattr(typ, '__name__'))
-        except Exception:
-            print(typ)
-            print(typ.__dict__)
-            raise Exception
+        self.typename = typename or getattr(typ,  '__qualname__', repr(typ))
 
     @abc.abstractmethod
     def to_dict(self) -> TypeDict:
