@@ -24,7 +24,11 @@ def get_column_type(column, example=None):
 
 
 def get_indices(df):
-    df_schema = pa.infer_schema(df)
+    try:
+        df_schema = pa.infer_schema(df)
+    except TypeError:
+        print("Failed to infer schema type")
+        return
     index = df_schema.index
     if hasattr(index, 'indexes'):
         yield from enumerate(index.indexes)
@@ -61,7 +65,11 @@ def df_to_model(df):
 
 
 def series_to_type(series):
-    series_schema = pa.infer_schema(series)
+    try:
+        series_schema = pa.infer_schema(series)
+    except TypeError:
+        print("Failed to infer type for column")
+        return Series[object]
     example = None
     if len(series) > 0:
         example = series[0]
