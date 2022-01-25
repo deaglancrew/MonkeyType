@@ -35,8 +35,18 @@ TypeDict = Dict[str, Any]
 
 class TypeTrace(abc.ABC):
     def __init__(self, typ, typename: Optional[str] = None):
-        self.type = typ
-        self.typename = typename or getattr(typ,  '__qualname__', repr(typ))
+        if typename is None:
+            self.type, self.typename = self._resolve_type_and_qualname(typ)
+        else:
+            self.type = typ
+            self.typename = typename
+
+    def _resolve_type_and_qualname(self, typ):
+        if hasattr(typ, '__qualname__'):
+            return typ, typ.__qualname__
+        elif hasattr(typ, 'type'):  # Important for numpy types
+            return self._resolve_type_and_qualname(typ.type)
+        return typ, typ.__name__
 
     @abc.abstractmethod
     def to_dict(self) -> TypeDict:
@@ -101,10 +111,12 @@ def _get_baseclass(d: TypeDict):
         return get_name_in_module(**d['base_class'])
     return type
 
+
 def _get_bases(d: TypeDict):
     if d.get('bases'):
         return tuple(get_name_in_module(**base) for base in d.get('bases'))
     return tuple()
+
 
 class ClassicalTypeTrace(TypeTrace):
     def to_dict(self) -> TypeDict:
@@ -315,4 +327,4 @@ def serialize_traces(traces: Iterable[CallTrace]) -> Iterable[CallTraceRow]:
         try:
             yield CallTraceRow.from_trace(trace)
         except Exception:
-            logger.exception(f"Failed to serialize trace for {trace.func}")
+            logger.exception(f"Failed to serialize trace")
