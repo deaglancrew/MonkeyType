@@ -12,7 +12,6 @@ DUMMY_MODEL_NAME = "DUMMY_PANDERA_MODEL"
 from pandera.typing import Series, Index
 from pandera.engines import numpy_engine
 from pandas import Index as pandasIndex
-from pandas import RangeIndex
 from typing import NamedTuple
 import builtins
 
@@ -50,10 +49,10 @@ def get_indices(df):
 def convert_indices_to_annotations(df):
     for level, index in get_indices(df):
         if level is not None:
-            index_type = get_column_type(index, example=df.index[0][level])
+            index_type = get_column_type(index, example=df.index.iloc[0][level])
             name = f"INDEX_{level}_{index.name or 'idx'}"
         else:
-            index_type = get_column_type(index, example=df.index[0])
+            index_type = get_column_type(index, example=df.index.iloc[0])
             name = index.name or 'idx'
         yield str(name), index_type
 
@@ -85,7 +84,7 @@ def series_to_type(series):
         return Series[object]
     example = None
     if len(series) > 0:
-        example = series[0]
+        example = series.iloc[0]
     output = Series[get_column_type(series_schema, example)]
     return output
 
@@ -98,4 +97,3 @@ class PanderaDataFrame(TypeHook):
         if isinstance(obj, pd.DataFrame):
             return df_to_model(obj)
         return series_to_type(obj)
-
